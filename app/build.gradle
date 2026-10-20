@@ -1,0 +1,54 @@
+plugins { id 'com.android.application' }
+
+def env = System.getenv()
+def signingPath = env['KEYSTORE_PATH']
+if (env['KEYSTORE_BASE64']) {
+    def keyFile = new File(layout.buildDirectory.get().asFile, 'signing/release.jks')
+    keyFile.parentFile.mkdirs()
+    keyFile.bytes = Base64.mimeDecoder.decode(env['KEYSTORE_BASE64'])
+    signingPath = keyFile.absolutePath
+}
+def storePass = env['KEYSTORE_PASSWORD']
+def aliasName = env['KEY_ALIAS'] ?: 'calculator'
+def keyPass = env['KEY_PASSWORD'] ?: storePass
+def canSign = signingPath && storePass && aliasName && keyPass
+
+android {
+    namespace 'com.comma.calculator'
+    compileSdk 35
+    defaultConfig {
+        applicationId 'com.comma.calculator'
+        minSdk 21
+        targetSdk 35
+        versionCode 2
+        versionName '1.1.0'
+    }
+    signingConfigs {
+        release {
+            if (canSign) {
+                storeFile file(signingPath)
+                storePassword storePass
+                keyAlias aliasName
+                keyPassword keyPass
+            }
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            if (canSign) signingConfig signingConfigs.release
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+}
+tasks.configureEach { task ->
+    if (task.name in ['packageRelease', 'assembleRelease']) {
+        task.doFirst {
+            if (!canSign) throw new GradleException('Release signing is required: configure KEYSTORE_BASE64 or KEYSTORE_PATH, KEYSTORE_PASSWORD, KEY_ALIAS and KEY_PASSWORD.')
+        }
+    }
+}
+dependencies { testImplementation 'junit:junit:4.13.2' }

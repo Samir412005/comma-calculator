@@ -1,0 +1,86 @@
+name: Build and publish APK
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+permissions:
+  contents: write
+concurrency:
+  group: calculator-release
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      KEYSTORE_PATH: ${{ github.workspace }}/ci-signing.jks
+      KEYSTORE_PASSWORD: calculator-ci-demo
+      KEY_ALIAS: calculator
+      KEY_PASSWORD: calculator-ci-demo
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Install Android SDK
+        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+      - name: Generate a NEW installation certificate
+        # Demo signing only. Constant alias/password does NOT make a stable RSA key.
+        # This key is generated once for this run, never published, and differs from v1.0.
+        # Use a private persistent signing key via repository secrets for future updates.
+        run: >-
+          keytool -genkeypair -noprompt -keystore "$KEYSTORE_PATH" -storetype JKS
+          -alias "$KEY_ALIAS" -storepass "$KEYSTORE_PASSWORD" -keypass "$KEY_PASSWORD"
+          -keyalg RSA -keysize 3072 -validity 10000
+          -dname 'CN=Comma Calculator CI, OU=Personal, O=Calculator, C=DZ'
+      - name: Check source structure
+        run: python3 tools/check_project.py
+      - name: Run engine tests and build release
+        run: gradle --no-daemon :app:testReleaseUnitTest :app:assembleRelease
+      - name: Verify signed APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          cp app/build/outputs/apk/release/app-release.apk release/calculator-1.1.0.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs release/calculator-1.1.0.apk | tee release/signature.txt
+          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -v 4 release/calculator-1.1.0.apk
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging release/calculator-1.1.0.apk | tee release/package-info.txt
+          (cd release && sha256sum calculator-1.1.0.apk > SHA256SUMS.txt)
+          python3 - <<'PY'
+          import zipfile
+          p='release/calculator-1.1.0.apk'
+          with zipfile.ZipFile(p) as z:
+              assert z.testzip() is None
+              assert {'AndroidManifest.xml','classes.dex','resources.arsc'} <= set(z.namelist())
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: calculator-1.1.0-signed
+          path: release/
+          if-no-files-found: error
+      - name: Publish public download
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view v1.1.0 >/dev/null 2>&1; then
+            gh release upload v1.1.0 release/* --clobber
+          else
+            gh release create v1.1.0 release/* --target "$GITHUB_SHA" --title 'آلة حاسبة 1.1.0' --notes 'Arabic calculator: themes, 60-entry history, square root, square and reciprocal. NEW CI signing certificate: uninstall the old app before installation if signatures differ. Uninstalling deletes local history. Engine tests and APK signature checks run in CI; Android UI has not been runtime-tested.'
+          fi
+      - name: Test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-test-reports
+          path: |
+            app/build/test-results/
+            app/build/reports/tests/
+          if-no-files-found: ignore
