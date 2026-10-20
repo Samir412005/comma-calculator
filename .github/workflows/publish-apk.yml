@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
-      KEYSTORE_PATH: ${{ github.workspace }}/ci-signing.jks
+      KEYSTORE_PATH: ${{ runner.temp }}/ci-signing.jks
       KEYSTORE_PASSWORD: calculator-ci-demo
       KEY_ALIAS: calculator
       KEY_PASSWORD: calculator-ci-demo
